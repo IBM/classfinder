@@ -1,2 +1,3 @@
 # classfinder
-Find a Java class in a folder
+
+Find a Java class in a folder.
