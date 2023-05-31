@@ -43,6 +43,13 @@ import org.apache.commons.io.IOUtils;
 public class App {
 	public static final int RC_FOUND = 0;
 	public static final int RC_NOT_FOUND = 2;
+
+	static {
+		if (System.getProperty("java.util.logging.SimpleFormatter.format") == null) {
+			System.setProperty("java.util.logging.SimpleFormatter.format", "[%1$tc] %4$s: %5$s %6$s%n");
+		}
+	}
+
 	private static final String CLASSNAME = App.class.getCanonicalName();
 	private static final Logger LOG = Logger.getLogger(CLASSNAME);
 	private static Attributes manifestMainAttributes;
