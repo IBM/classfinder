@@ -41,6 +41,7 @@
                 https://docs.oracle.com/en/java/javase/17/docs/specs/jar/jar.html#main-attribute
               -->
               <AppName>${project.name}</AppName>
+              <AppVersion>${project.version}</AppVersion>
               <BuildTime>${maven.build.timestamp}</BuildTime>
             </manifestEntries>
           </archive>

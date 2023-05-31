@@ -27,7 +27,9 @@ public class App {
 
 	public static void main(String[] args) {
 		if (LOG.isLoggable(Level.INFO))
-			LOG.info("Started " + getManifestEntry("AppName") + ", build version " + getManifestEntry("BuildTime"));
+			LOG.info("Started " + getManifestEntry("AppName") + ", version " + getManifestEntry("AppVersion")
+					+ ", build version " + getManifestEntry("BuildTime"));
+
 		System.out.println("Hello World!");
 	}
 
