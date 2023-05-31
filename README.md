@@ -1,6 +1,6 @@
 # classfinder
 
-Find a Java class in a folder.
+Find a Java class in a folder. Automatically expands `*.zip`, `*.jar`, and `*.jmod` files, searches them, and deletes the extracted directories afterwards.
 
 ## usage
 
