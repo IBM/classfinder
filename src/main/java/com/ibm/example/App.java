@@ -16,16 +16,29 @@
 package com.ibm.example;
 
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Enumeration;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.Stack;
 import java.util.function.Consumer;
 import java.util.jar.Attributes;
 import java.util.jar.Manifest;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
+
+import org.apache.commons.io.FileUtils;
+import org.apache.commons.io.IOUtils;
 
 public class App {
 	public static final int RC_FOUND = 0;
@@ -47,6 +60,7 @@ public class App {
 			LOG.info("Started " + getManifestEntry("AppName") + ", version " + getManifestEntry("AppVersion")
 					+ ", build version " + getManifestEntry("BuildTime"));
 
+		boolean keepExtractedFiles = false;
 		String findClass = null;
 		List<File> directories = new ArrayList<>();
 		for (int i = 0; i < args.length; i++) {
@@ -54,6 +68,8 @@ public class App {
 			if (arg.startsWith("-")) {
 				if (arg.equals("-h") || arg.equals("--help") || arg.equals("--usage")) {
 					usage(null);
+				} else if (arg.equals("-k") || arg.equals("--keep-extracted-files")) {
+					keepExtractedFiles = true;
 				}
 			} else {
 				if (findClass == null) {
@@ -75,9 +91,34 @@ public class App {
 		if (LOG.isLoggable(Level.INFO))
 			LOG.info("Searching for " + findClass + " in " + directories);
 
-		int rc = search(findClass, directories, (file) -> {
+		Set<String> extractedDirectories = new HashSet<>();
+
+		int rc = search(findClass, directories, extractedDirectories, (file) -> {
 			System.out.println(getNormalizedPath(file));
 		});
+
+		if (!keepExtractedFiles) {
+			if (LOG.isLoggable(Level.FINE))
+				LOG.fine("Started deleting extracted directories");
+
+			for (String extractedDirectory : extractedDirectories) {
+				try {
+					if (LOG.isLoggable(Level.FINE))
+						LOG.fine("Started deleting extracted directory " + extractedDirectory);
+
+					FileUtils.deleteDirectory(new File(extractedDirectory));
+
+					if (LOG.isLoggable(Level.FINE))
+						LOG.fine("Finished deleting extracted directory " + extractedDirectory);
+				} catch (IOException e) {
+					if (LOG.isLoggable(Level.WARNING))
+						LOG.log(Level.WARNING, "Error cleaning up extracted directory " + extractedDirectory, e);
+				}
+			}
+
+			if (LOG.isLoggable(Level.FINE))
+				LOG.fine("Finished deleting extracted directories");
+		}
 
 		if (LOG.isLoggable(Level.INFO))
 			LOG.info("Exiting with return code " + rc);
@@ -93,34 +134,125 @@ public class App {
 		}
 	}
 
-	public static int search(String findClass, List<File> directories, Consumer<File> foundMatch) {
+	public static int search(String findClass, List<File> directories, Set<String> extractedDirectories,
+			Consumer<File> foundMatch) {
 		int rc = RC_NOT_FOUND;
 
+		Set<String> directoriesSearched = new HashSet<>();
+		Stack<File> directoriesToSearch = new Stack<>();
 		for (File directory : directories) {
-			if (search(findClass, directory, foundMatch)) {
+			directoriesToSearch.push(directory);
+		}
+
+		while (!directoriesToSearch.isEmpty()) {
+			File directory = directoriesToSearch.pop();
+			if (searchDirectory(findClass, directory, extractedDirectories, foundMatch, directoriesToSearch,
+					directoriesSearched)) {
 				rc = RC_FOUND;
 			}
 		}
 		return rc;
 	}
 
-	public static boolean search(String findClass, File directory, Consumer<File> foundMatch) {
+	private static boolean searchDirectory(String findClass, File directory, Set<String> extractedDirectories,
+			Consumer<File> foundMatch, Stack<File> directoriesToSearch, Set<String> directoriesSearched) {
+		
+		if (LOG.isLoggable(Level.FINER))
+			LOG.entering(CLASSNAME, "search", new Object[] { findClass, directory.getAbsolutePath() });
+		
 		boolean result = false;
-		for (File directoryEntry : directory.listFiles()) {
-			if (directoryEntry.isDirectory()) {
-				if (search(findClass, directoryEntry, foundMatch)) {
-					result = true;
-				}
-			} else {
-				if (LOG.isLoggable(Level.FINE))
-					LOG.fine("Analyzing " + directoryEntry);
 
-				if (doesJavaClassNameMatch(findClass, directoryEntry)) {
-					foundMatch.accept(directoryEntry);
+		String normalizedPath = getNormalizedPath(directory);
+		
+		if (!directoriesSearched.contains(normalizedPath)) {
+			directoriesSearched.add(normalizedPath);
+
+			for (File directoryEntry : directory.listFiles()) {
+				if (directoryEntry.isDirectory()) {
+					if (searchDirectory(findClass, directoryEntry, extractedDirectories, foundMatch, directoriesToSearch,
+							directoriesSearched)) {
+						result = true;
+					}
+				} else {
+					if (LOG.isLoggable(Level.FINE))
+						LOG.fine("Analyzing " + directoryEntry);
+
+					if (isKnownCompressedFile(directoryEntry)) {
+						try {
+							directoriesToSearch.push(extractFile(directoryEntry, extractedDirectories));
+						} catch (IOException e) {
+							if (LOG.isLoggable(Level.WARNING))
+								LOG.log(Level.WARNING, "Error extracting file " + directoryEntry.getAbsolutePath(), e);
+						}
+					} else if (doesJavaClassNameMatch(findClass, directoryEntry)) {
+						foundMatch.accept(directoryEntry);
+					}
 				}
 			}
 		}
+
+		if (LOG.isLoggable(Level.FINER))
+			LOG.exiting(CLASSNAME, "search", result);
+
 		return result;
+	}
+
+	public static boolean isKnownCompressedFile(File file) {
+		String fileName = file.getName().toLowerCase();
+		return isZipFile(fileName);
+	}
+
+	public static File extractFile(File file, Set<String> extractedDirectories) throws IOException {
+		String fileName = file.getName().toLowerCase();
+
+		// First create the extracted directory
+		File extractDestination = new File(file.getParentFile(), file.getName() + "_unpack");
+		Path extractDestinationPath = extractDestination.toPath();
+		if (!extractDestination.exists()) {
+
+			if (LOG.isLoggable(Level.FINE))
+				LOG.fine("Creating extract destination " + extractDestination.getAbsolutePath());
+
+			extractDestination.mkdir();
+		}
+		extractedDirectories.add(getNormalizedPath(extractDestination));
+
+		if (LOG.isLoggable(Level.FINE))
+			LOG.fine("Started extracting file " + file.getName() + " to " + extractDestination.getAbsolutePath());
+
+		if (isZipFile(fileName)) {
+			try (ZipFile zipFile = new ZipFile(file, ZipFile.OPEN_READ)) {
+				Enumeration<? extends ZipEntry> entries = zipFile.entries();
+				while (entries.hasMoreElements()) {
+					ZipEntry entry = entries.nextElement();
+					Path entryPath = extractDestinationPath.resolve(entry.getName());
+					if (entryPath.normalize().startsWith(extractDestinationPath.normalize())) {
+						if (entry.isDirectory()) {
+							Files.createDirectories(entryPath);
+						} else {
+							Files.createDirectories(entryPath.getParent());
+							try (InputStream in = zipFile.getInputStream(entry)) {
+								try (OutputStream out = new FileOutputStream(entryPath.toFile())) {
+									IOUtils.copy(in, out);
+								}
+							}
+						}
+					}
+				}
+			}
+		} else {
+			throw new UnsupportedOperationException("Unknown compressed file name " + file.getAbsolutePath());
+		}
+
+		if (LOG.isLoggable(Level.FINE))
+			LOG.fine("Finished extracting file " + file.getName() + " to " + extractDestination.getAbsolutePath());
+
+		return extractDestination;
+	}
+
+	public static boolean isZipFile(String fileName) {
+		return fileName.endsWith(".jmod") || fileName.endsWith(".zip") || fileName.endsWith(".jar")
+				|| fileName.endsWith(".hcd");
 	}
 
 	public static boolean doesJavaClassNameMatch(String className, File path) {
