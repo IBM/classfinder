@@ -36,10 +36,10 @@
         <configuration>
           <archive>
             <manifestEntries>
-			  <!--
-			    "Attributes which are not understood are ignored. Such attributes may include implementation specific information used by applications."
-			  	https://docs.oracle.com/en/java/javase/17/docs/specs/jar/jar.html#main-attribute
-			  -->
+              <!--
+                "Attributes which are not understood are ignored. Such attributes may include implementation specific information used by applications."
+                https://docs.oracle.com/en/java/javase/17/docs/specs/jar/jar.html#main-attribute
+              -->
               <AppName>${project.name}</AppName>
               <BuildTime>${maven.build.timestamp}</BuildTime>
             </manifestEntries>
