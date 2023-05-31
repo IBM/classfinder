@@ -60,6 +60,7 @@ public class App {
 			LOG.info("Started " + getManifestEntry("AppName") + ", version " + getManifestEntry("AppVersion")
 					+ ", build version " + getManifestEntry("BuildTime"));
 
+		boolean skipMACOSXdirectories = true;
 		boolean keepExtractedFiles = false;
 		String findClass = null;
 		List<File> directories = new ArrayList<>();
@@ -95,7 +96,7 @@ public class App {
 
 		int rc = search(findClass, directories, extractedDirectories, (file) -> {
 			System.out.println(getNormalizedPath(file));
-		});
+		}, skipMACOSXdirectories);
 
 		if (!keepExtractedFiles) {
 			if (LOG.isLoggable(Level.FINE))
@@ -135,7 +136,7 @@ public class App {
 	}
 
 	public static int search(String findClass, List<File> directories, Set<String> extractedDirectories,
-			Consumer<File> foundMatch) {
+			Consumer<File> foundMatch, boolean skipMACOSXdirectories) {
 		int rc = RC_NOT_FOUND;
 
 		Set<String> directoriesSearched = new HashSet<>();
@@ -147,7 +148,7 @@ public class App {
 		while (!directoriesToSearch.isEmpty()) {
 			File directory = directoriesToSearch.pop();
 			if (searchDirectory(findClass, directory, extractedDirectories, foundMatch, directoriesToSearch,
-					directoriesSearched)) {
+					directoriesSearched, skipMACOSXdirectories)) {
 				rc = RC_FOUND;
 			}
 		}
@@ -155,39 +156,47 @@ public class App {
 	}
 
 	private static boolean searchDirectory(String findClass, File directory, Set<String> extractedDirectories,
-			Consumer<File> foundMatch, Stack<File> directoriesToSearch, Set<String> directoriesSearched) {
-		
+			Consumer<File> foundMatch, Stack<File> directoriesToSearch, Set<String> directoriesSearched,
+			boolean skipMACOSXdirectories) {
+
 		if (LOG.isLoggable(Level.FINER))
 			LOG.entering(CLASSNAME, "search", new Object[] { findClass, directory.getAbsolutePath() });
-		
+
 		boolean result = false;
 
 		String normalizedPath = getNormalizedPath(directory);
-		
+
 		if (!directoriesSearched.contains(normalizedPath)) {
 			directoriesSearched.add(normalizedPath);
 
-			for (File directoryEntry : directory.listFiles()) {
-				if (directoryEntry.isDirectory()) {
-					if (searchDirectory(findClass, directoryEntry, extractedDirectories, foundMatch, directoriesToSearch,
-							directoriesSearched)) {
-						result = true;
-					}
-				} else {
-					if (LOG.isLoggable(Level.FINE))
-						LOG.fine("Analyzing " + directoryEntry);
-
-					if (isKnownCompressedFile(directoryEntry)) {
-						try {
-							directoriesToSearch.push(extractFile(directoryEntry, extractedDirectories));
-						} catch (IOException e) {
-							if (LOG.isLoggable(Level.WARNING))
-								LOG.log(Level.WARNING, "Error extracting file " + directoryEntry.getAbsolutePath(), e);
+			if (!shouldSkipDirectory(directory, normalizedPath, skipMACOSXdirectories)) {
+				for (File directoryEntry : directory.listFiles()) {
+					if (directoryEntry.isDirectory()) {
+						if (searchDirectory(findClass, directoryEntry, extractedDirectories, foundMatch,
+								directoriesToSearch, directoriesSearched, skipMACOSXdirectories)) {
+							result = true;
 						}
-					} else if (doesJavaClassNameMatch(findClass, directoryEntry)) {
-						foundMatch.accept(directoryEntry);
+					} else {
+						if (LOG.isLoggable(Level.FINE))
+							LOG.fine("Analyzing " + directoryEntry);
+
+						if (isKnownCompressedFile(directoryEntry)) {
+							try {
+								directoriesToSearch.push(extractFile(directoryEntry, extractedDirectories));
+							} catch (IOException e) {
+								if (LOG.isLoggable(Level.WARNING))
+									LOG.log(Level.WARNING, "Error extracting file " + directoryEntry.getAbsolutePath(),
+											e);
+							}
+						} else if (doesJavaClassNameMatch(findClass, directoryEntry)) {
+							foundMatch.accept(directoryEntry);
+							result = true;
+						}
 					}
 				}
+			} else {
+				if (LOG.isLoggable(Level.FINE))
+					LOG.fine("Skipping directory");
 			}
 		}
 
@@ -195,6 +204,13 @@ public class App {
 			LOG.exiting(CLASSNAME, "search", result);
 
 		return result;
+	}
+
+	private static boolean shouldSkipDirectory(File directory, String normalizedPath, boolean skipMACOSXdirectories) {
+		if (skipMACOSXdirectories && normalizedPath.contains("/__MACOSX/")) {
+			return true;
+		}
+		return false;
 	}
 
 	public static boolean isKnownCompressedFile(File file) {
