@@ -11,3 +11,10 @@ usage: java -jar classfinder.jar CLASS [DIRECTORY...]
 ```
 
 Currently, `CLASS` does not support package names.
+
+## Development
+
+1. Build:
+   ```
+   mvn clean install
+   ```
