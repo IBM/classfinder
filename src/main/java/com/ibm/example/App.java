@@ -129,9 +129,20 @@ public class App {
 		}
 
 		if (LOG.isLoggable(Level.INFO))
-			LOG.info("Exiting with return code " + rc);
+			LOG.info("Exiting with return code " + rc + " (" + getHumanReadableReturnCode(rc) + ")");
 
 		System.exit(rc);
+	}
+	
+	public static String getHumanReadableReturnCode(int rc) {
+		switch (rc) {
+		case RC_FOUND:
+			return "at least one result found";
+		case RC_NOT_FOUND:
+			return "no results found";
+		default:
+			return "unknown";
+		}
 	}
 
 	public static String getNormalizedPath(File file) {
