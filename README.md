@@ -14,7 +14,18 @@ Currently, `CLASS` does not support package names.
 
 ## Development
 
+### New Release
+
+1. Update `version` in `pom.xml`
 1. Build:
    ```
    mvn clean install
+   ```
+1. Commit and push
+1. Wait for the GitHub Action build to succeed
+1. Tag and push:
+   ```
+   git tag -l
+   git tag 0.X.Y
+   git push --tags
    ```
