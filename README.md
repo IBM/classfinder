@@ -12,6 +12,12 @@ usage: java -jar classfinder.jar CLASS [DIRECTORY...]
 
 Currently, `CLASS` does not support package names.
 
+### Trace
+
+```
+-Djava.util.logging.config.file=/$PATH/logging.properties
+```
+
 ## Development
 
 ### New Release

@@ -37,6 +37,12 @@ import java.util.logging.Logger;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
+import org.apache.bcel.classfile.AnnotationEntry;
+import org.apache.bcel.classfile.ClassFormatException;
+import org.apache.bcel.classfile.ClassParser;
+import org.apache.bcel.classfile.Field;
+import org.apache.bcel.classfile.JavaClass;
+import org.apache.bcel.classfile.Method;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.IOUtils;
 
@@ -70,7 +76,9 @@ public class App {
 		boolean skipMACOSXdirectories = true;
 		boolean keepExtractedFiles = false;
 		String findClass = null;
-		List<File> directories = new ArrayList<>();
+		List<File> directoriesOrFiles = new ArrayList<>();
+		List<AnnotationSearch> annotationSearches = new ArrayList<>();
+		
 		for (int i = 0; i < args.length; i++) {
 			String arg = args[i];
 			if (arg.startsWith("-")) {
@@ -78,12 +86,23 @@ public class App {
 					usage(null);
 				} else if (arg.equals("-k") || arg.equals("--keep-extracted-files")) {
 					keepExtractedFiles = true;
+				} else if (arg.equals("-a") || arg.equals("--annotation-search")) {
+					AnnotationSearch annotationSearch = new AnnotationSearch();
+					annotationSearches.add(annotationSearch);
+					String spec = args[++i];
+					String[] pieces = spec.split(";");
+					annotationSearch.annotation = pieces[0];
+					if (pieces.length > 1) {
+						annotationSearch.toStringSearch = pieces[1];
+					}
+				} else {
+					throw new RuntimeException("Unknown option " + arg);
 				}
 			} else {
 				if (findClass == null) {
 					findClass = arg;
 				} else {
-					directories.add(new File(arg));
+					directoriesOrFiles.add(new File(arg));
 				}
 			}
 		}
@@ -92,16 +111,16 @@ public class App {
 			usage("CLASS not specified.");
 		}
 
-		if (directories.size() == 0) {
-			directories.add(new File("."));
+		if (directoriesOrFiles.size() == 0) {
+			directoriesOrFiles.add(new File("."));
 		}
-
+		
 		if (LOG.isLoggable(Level.INFO))
-			LOG.info("Searching for " + findClass + " in " + directories);
+			LOG.info("Searching for " + findClass + " in " + directoriesOrFiles);
 
 		Set<String> extractedDirectories = new HashSet<>();
 
-		int rc = search(findClass, directories, extractedDirectories, (file) -> {
+		int rc = search(findClass, directoriesOrFiles, extractedDirectories, annotationSearches, (file) -> {
 			System.out.println(getNormalizedPath(file));
 		}, skipMACOSXdirectories);
 
@@ -153,7 +172,7 @@ public class App {
 		}
 	}
 
-	public static int search(String findClass, List<File> directories, Set<String> extractedDirectories,
+	public static int search(String findClass, List<File> directories, Set<String> extractedDirectories, List<AnnotationSearch> annotationSearches,
 			Consumer<File> foundMatch, boolean skipMACOSXdirectories) {
 		int rc = RC_NOT_FOUND;
 
@@ -165,7 +184,7 @@ public class App {
 
 		while (!directoriesToSearch.isEmpty()) {
 			File directory = directoriesToSearch.pop();
-			if (searchDirectory(findClass, directory, extractedDirectories, foundMatch, directoriesToSearch,
+			if (searchDirectory(findClass, directory, extractedDirectories, annotationSearches, foundMatch, directoriesToSearch,
 					directoriesSearched, skipMACOSXdirectories)) {
 				rc = RC_FOUND;
 			}
@@ -173,7 +192,7 @@ public class App {
 		return rc;
 	}
 
-	private static boolean searchDirectory(String findClass, File directory, Set<String> extractedDirectories,
+	private static boolean searchDirectory(String findClass, File directory, Set<String> extractedDirectories, List<AnnotationSearch> annotationSearches,
 			Consumer<File> foundMatch, Stack<File> directoriesToSearch, Set<String> directoriesSearched,
 			boolean skipMACOSXdirectories) {
 
@@ -188,9 +207,10 @@ public class App {
 			directoriesSearched.add(normalizedPath);
 
 			if (!shouldSkipDirectory(directory, normalizedPath, skipMACOSXdirectories)) {
-				for (File directoryEntry : directory.listFiles()) {
+				File[] searchFiles = directory.isFile() ? new File[] { directory } : directory.listFiles();
+				for (File directoryEntry : searchFiles) {
 					if (directoryEntry.isDirectory()) {
-						if (searchDirectory(findClass, directoryEntry, extractedDirectories, foundMatch,
+						if (searchDirectory(findClass, directoryEntry, extractedDirectories, annotationSearches, foundMatch,
 								directoriesToSearch, directoriesSearched, skipMACOSXdirectories)) {
 							result = true;
 						}
@@ -206,7 +226,7 @@ public class App {
 									LOG.log(Level.WARNING, "Error extracting file " + directoryEntry.getAbsolutePath(),
 											e);
 							}
-						} else if (doesJavaClassNameMatch(findClass, directoryEntry)) {
+						} else if (isMatch(findClass, directoryEntry, annotationSearches)) {
 							foundMatch.accept(directoryEntry);
 							result = true;
 						}
@@ -225,6 +245,9 @@ public class App {
 	}
 
 	private static boolean shouldSkipDirectory(File directory, String normalizedPath, boolean skipMACOSXdirectories) {
+		if (directory.isFile()) {
+			directory = directory.getParentFile();
+		}
 		if (skipMACOSXdirectories && normalizedPath.contains("/__MACOSX/")) {
 			return true;
 		}
@@ -285,24 +308,93 @@ public class App {
 	}
 
 	public static boolean isZipFile(String fileName) {
+		fileName = fileName.toLowerCase();
 		return fileName.endsWith(".jmod") || fileName.endsWith(".zip") || fileName.endsWith(".jar")
-				|| fileName.endsWith(".hcd");
+				|| fileName.endsWith(".hcd") || fileName.endsWith(".ear") || fileName.endsWith(".war");
 	}
 
-	public static boolean doesJavaClassNameMatch(String className, File path) {
+	public static boolean isMatch(String className, File path, List<AnnotationSearch> annotationSearches) {
 		boolean result = false;
 
 		if (LOG.isLoggable(Level.FINER))
-			LOG.entering(CLASSNAME, "doesJavaClassNameMatch", new Object[] { className, path, path.getName() });
+			LOG.entering(CLASSNAME, "isMatch", new Object[] { className, path, path.getName() });
 
-		if ((className + ".class").equals(path.getName())) {
+		String pathName = path.getName();
+		
+		if ("*".equals(className) && pathName.endsWith(".class")) {
 			result = true;
+		} else if ((className + ".class").equals(pathName)) {
+			result = true;
+		}
+		
+		if (result) {
+			if (annotationSearches.size() > 0) {
+				
+				// Since annotationSearches is specified, then we first set the result
+				// back to false and then try to find a match for the searches
+				result = false;
+				
+				if (LOG.isLoggable(Level.FINER))
+					LOG.fine("Processing class searches for " + path.getAbsolutePath());
+
+				ClassParser classParser = new ClassParser(path.getAbsolutePath());
+				try {
+					JavaClass clazz = classParser.parse();
+					for (AnnotationSearch annotationSearch : annotationSearches) {
+						if (annotationSearch.annotation != null) {
+							for (AnnotationEntry annotation : clazz.getAnnotationEntries()) {
+								if (searchAnnotation(annotationSearch, pathName, annotation)) {
+									result = true;
+									break;
+								}
+							}
+						}
+						for (Field field : clazz.getFields()) {
+							for (AnnotationEntry annotation : field.getAnnotationEntries()) {
+								if (searchAnnotation(annotationSearch, pathName, annotation)) {
+									result = true;
+									break;
+								}
+							}
+						}
+						for (Method method : clazz.getMethods()) {
+							for (AnnotationEntry annotation : method.getAnnotationEntries()) {
+								if (searchAnnotation(annotationSearch, pathName, annotation)) {
+									result = true;
+									break;
+								}
+							}
+						}
+					}
+				} catch (ClassFormatException | IOException e) {
+					if (LOG.isLoggable(Level.WARNING))
+						LOG.log(Level.WARNING, "Could not parse class " + path.getAbsolutePath(), e);
+				}
+			}
 		}
 
 		if (LOG.isLoggable(Level.FINER))
-			LOG.exiting(CLASSNAME, "doesJavaClassNameMatch", result);
+			LOG.exiting(CLASSNAME, "isMatch", result);
 
 		return result;
+	}
+
+	private static boolean searchAnnotation(AnnotationSearch annotationSearch, String pathName, AnnotationEntry annotation) {
+		// Ljakarta/servlet/annotation/WebServlet;
+		String annotationClass = annotation.getAnnotationType();
+		annotationClass = annotationClass.substring(1);
+		annotationClass = annotationClass.substring(0, annotationClass.length() - 1);
+		
+		// Example usage:
+		// -a "org/eclipse/mat/query/annotations/Argument;isMandatory=true"
+		if (annotationClass.equals(annotationSearch.annotation)) {
+			if (annotationSearch.toStringSearch == null) {
+				return true;
+			} else {
+				return annotation.toString().contains(annotationSearch.toStringSearch);
+			}
+		}
+		return false;
 	}
 
 	public static synchronized String getManifestEntry(String name) {
@@ -320,5 +412,10 @@ public class App {
 		} else {
 			return "Unknown manifest value for " + name;
 		}
+	}
+	
+	static class AnnotationSearch {
+		String annotation;
+		String toStringSearch;
 	}
 }
