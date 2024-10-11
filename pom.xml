@@ -34,9 +34,9 @@
   </dependencies>
   
   <build>
-	<finalName>${project.name}</finalName>
+  <finalName>${project.name}</finalName>
     <plugins>
-	  <plugin>
+    <plugin>
         <artifactId>maven-jar-plugin</artifactId>
         <version>${version.maven-jar-plugin}</version>
         <configuration>
@@ -69,6 +69,18 @@
                   <mainClass>com.ibm.example.App</mainClass>
                 </transformer>
               </transformers>
+              <filters>
+                <filter>
+                  <artifact>*:*</artifact>
+                  <excludes>
+                    <exclude>META-INF/MANIFEST.MF</exclude>
+                    <exclude>META-INF/NOTICE</exclude>
+                    <exclude>META-INF/LICENSE</exclude>
+                    <exclude>META-INF/LICENSE.txt</exclude>
+                    <exclude>**/module-info.class</exclude>
+                  </excludes>
+                </filter>
+              </filters>
             </configuration>
           </execution>
         </executions>
